@@ -365,11 +365,18 @@ create policy "messages:participant_read"
     )
   );
 
--- Authenticated users can insert messages (sender validation is app-level)
+-- Authenticated users can insert messages into conversations where they are a participant
 drop policy if exists "messages:authenticated_insert" on messages;
 create policy "messages:authenticated_insert"
   on messages for insert
-  with check (auth.role() = 'authenticated');
+  with check (
+    auth.role() = 'authenticated'
+    and exists (
+      select 1 from conversations c
+      where c.id = conversation_id
+      and (auth.uid()::text = c.buyer_id or auth.uid() = c.artisan_id)
+    )
+  );
 
 -- ─── reviews ─────────────────────────────────────────────────────────────────
 

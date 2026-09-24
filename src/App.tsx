@@ -255,10 +255,12 @@ export function App() {
 
   const t = (key: string) => translate(language, key);
 
-  // Save products to localStorage
+  // Clean up legacy base64 products from localStorage to prevent quota exceeded error
   useEffect(() => {
-    safeSetLocalStorage('shilp_ai_products', products);
-  }, [products]);
+    try {
+      localStorage.removeItem('shilp_ai_products');
+    } catch {}
+  }, []);
 
   // Save conversations to localStorage
   useEffect(() => {
@@ -814,7 +816,7 @@ export function App() {
               onSendMessage={handleSendMessage}
               reviews={reviews}
               onSelectProduct={(prod) => setSelectedProduct(prod)}
-              onStartConversation={handleStartConversation}
+              onStartConversation={(aId, aName, pId, pTitle) => { handleStartConversation(aId, aName, pId, pTitle); }}
               onBuyNow={(prod) => {
                 setSelectedProduct(null);
                 setProductToCheckout(prod);
@@ -1142,8 +1144,9 @@ export function App() {
                   )}
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
         </MobileFrame>
       </main>
 

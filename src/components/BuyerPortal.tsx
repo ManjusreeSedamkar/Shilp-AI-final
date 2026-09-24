@@ -25,6 +25,7 @@ import { HeritageHeroSection } from './HeritageHeroSection';
 import { CraftAtlasExplorer } from './CraftAtlasExplorer';
 import { useMobileMode } from './MobileFrame';
 import { translate } from '../services/translations';
+import { saveRFQToSupabase } from '../services/supabase';
 import {
   getProductTitle,
   getProductDescription,
@@ -386,8 +387,21 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
     onStartConversation?.(product.artisanId, product.artisanName, product.id, product.titleEn);
   };
 
-  const handleSendRFQ = (e: React.FormEvent) => {
+  const handleSendRFQ = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (activeRFQProduct) {
+      const rfqId = `rfq-${Date.now()}`;
+      await saveRFQToSupabase({
+        id: rfqId,
+        buyerId: buyerId || '00000000-0000-0000-0000-000000000201',
+        buyerName: rfqForm.buyerName || buyerName || 'B2B Buyer',
+        artisanId: activeRFQProduct.artisanId,
+        productId: activeRFQProduct.id,
+        quantity: rfqForm.quantity,
+        message: `${rfqForm.notes} (Company: ${rfqForm.companyName}, Target Date: ${rfqForm.targetDate}, Contact: ${rfqForm.phone})`,
+        status: 'pending',
+      });
+    }
     setRfqSubmitted(true);
     setTimeout(() => {
       setActiveRFQProduct(null);
@@ -477,12 +491,12 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
 
         {/* Category Pills */}
         <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar pt-1">
-          {categories.map((cat) => (
+          {['all', ...availableCategories.map((c) => c.name)].map((cat: string) => (
             <button
               key={cat}
-              onClick={() => setSelectedCategory(cat)}
+              onClick={() => setSelectedCategories(cat === 'all' ? [] : [cat])}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-                selectedCategory === cat
+                (cat === 'all' && selectedCategories.length === 0) || selectedCategories.includes(cat)
                   ? 'bg-stone-900 text-white shadow-xs'
                   : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
               }`}
@@ -493,12 +507,11 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
             </button>
           ))}
         </div>
-        </div>
 
       {/* Recommended Crafts Section — Real Supabase recommendations & interests */}
       {computedRecommendations.length > 0 &&
-        selectedCategory === 'all' &&
-        selectedState === 'all' &&
+        selectedCategories.length === 0 &&
+        selectedStates.length === 0 &&
         !searchQuery && (
           <div className="bg-amber-50/70 dark:bg-[#1B2435] rounded-3xl p-4 sm:p-5 border border-amber-200/80 dark:border-amber-400/20 space-y-3 shadow-2xs">
             <div className="flex items-center justify-between">
@@ -586,83 +599,42 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
         </span>
       </div>
 
-      {/* Product Catalog Grid */}
-      {filteredProducts.length === 0 ? (
-        <div className="p-10 text-center bg-white dark:bg-[#131E33] rounded-3xl border border-stone-200 dark:border-stone-800 space-y-3">
-          <div className="text-4xl">🔍</div>
-
-          <h3 className="font-bold text-base text-stone-900 dark:text-white">
-            {language === 'hi' ? 'कोई शिल्प वस्तु नहीं मिली' : 'No Craft Items Found'}
-          </h3>
-
-          <p className="text-xs text-stone-500 dark:text-stone-400 max-w-sm mx-auto leading-relaxed">
-            No products match your search query or selected filters. Try resetting your search filters to explore all artisan listings.
-          </p>
-
-          <button
-            onClick={() => {
-              setSearchQuery('');
-              setSelectedCategory('all');
-              setSelectedState('all');
-              setOnlyGICertified(false);
-            }}
-            className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition-all"
-          >
-            Reset All Filters
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredProducts.map((product) => (
-            <div
-              key={product.id}
-              onClick={() => onSelectProduct(product)}
-              className="bg-white dark:bg-[#131E33] rounded-3xl border-2 border-[#EADCD5] dark:border-[#22355B] overflow-hidden shadow-[0_4px_16px_rgba(200,90,50,0.05)] hover:shadow-[0_12px_32px_rgba(200,90,50,0.12)] hover:-translate-y-1 transition-all duration-300 cursor-pointer group flex flex-col justify-between"
-            >
-              <div>
-                {/* Product Visual */}
-                <div className="relative aspect-[4/3] bg-[#FAF7F2] dark:bg-[#0A101D] overflow-hidden flex items-center justify-center">
-                  <img
-                    src={product.enhancedImageUrl || product.enhancedImage || product.originalImageUrl || product.originalImage}
-                    alt={product.titleEn}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-
-                  <div className="absolute top-3 left-3 flex flex-col gap-1">
-                    {product.giCertified && (
-                      <span className="bg-[#1C1815]/90 text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-full backdrop-blur-xs shadow-xs border border-amber-400/30 flex items-center gap-1">
-                        <Award className="w-3 h-3 text-amber-300" />
-                        GI Certified
-                      </span>
-                    )}
-
-                    <span className="bg-stone-900/85 text-amber-300 text-[9px] font-mono px-2 py-0.5 rounded-md backdrop-blur">
-                      {product.state}
-                    </span>
-                  </div>
-                </div>
+        {/* Two-Column Archive: Left Sidebar Filters + Right Product Grid */}
+        <div className="flex flex-col lg:flex-row gap-6">
+          <aside className={`w-full lg:w-72 shrink-0 space-y-4 bg-white dark:bg-[#0F172A] p-4 rounded-2xl border border-stone-200/90 dark:border-stone-800/90 shadow-xs transition-all ${
+            isMobileFiltersOpen
+              ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[85vw] h-full overflow-y-auto shadow-2xl animate-slideRight'
+              : isMobileMode ? 'hidden' : 'hidden lg:block'
+          }`}>
+            <div className="flex items-center justify-between pb-3 border-b border-stone-100 dark:border-stone-800">
+              <div className="flex items-center space-x-2">
+                <SlidersHorizontal className="w-4 h-4 text-[#8B1D1D] dark:text-amber-400" />
+                <h3 className="font-bold text-sm text-stone-900 dark:text-stone-100">
+                  Filter Repository
+                </h3>
               </div>
+              <button
+                onClick={() => setIsMobileFiltersOpen(false)}
+                className="lg:hidden text-stone-400 hover:text-stone-700 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          ))}
-        </div>
-      )}
-                </div>
 
-                {activeFiltersCount > 0 && (
-                  <div className="mt-2.5 flex items-center justify-between">
-                    <span className="text-[11px] font-mono text-stone-500">
-                      {activeFiltersCount} filter(s) active
-                    </span>
-                    <button
-                      onClick={clearAllFilters}
-                      className="text-[11px] font-bold text-[#8B1D1D] dark:text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>Clear All</span>
-                    </button>
-                  </div>
-                )}
+            {activeFiltersCount > 0 && (
+              <div className="mt-2.5 flex items-center justify-between">
+                <span className="text-[11px] font-mono text-stone-500">
+                  {activeFiltersCount} filter(s) active
+                </span>
+                <button
+                  onClick={clearAllFilters}
+                  className="text-[11px] font-bold text-[#8B1D1D] dark:text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Clear All</span>
+                </button>
               </div>
+            )}
 
               {/* ----------------------------------------------------------------- */}
               {/* Accordion 1: Main Category (Vastra Shilpa Kosh)                   */}
@@ -853,8 +825,6 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
                   </div>
                 )}
               </div>
-
-            </div>
           </aside>
 
           {/* Mobile backdrop */}
@@ -878,7 +848,6 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
                   <span className="bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-xs px-2.5 py-0.5 rounded-full font-bold">
                     {filteredProducts.length} artifacts
                   </span>
-                </div>
                 </div>
                 <p className="text-[11px] text-stone-500 dark:text-stone-400">
                   National Repository standard catalog with direct artisan procurement linkage
@@ -1157,32 +1126,7 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
 
           </main>
         </div>
-
-              {onOpenCardModal && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenCardModal();
-                  }}
-                  className="p-2.5 rounded-xl border border-amber-200 bg-amber-50/60 hover:bg-amber-100 text-amber-900 transition-colors shadow-2xs"
-                  title="View Verified Artisan Smart ID Profile"
-                >
-                  <ShieldCheck className="w-4 h-4 text-amber-700" />
-                </button>
-              )}
-
-              <button
-                onClick={(e) => handleOpenRFQ(product, e)}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5"
-              >
-                <Building2 className="w-3.5 h-3.5 text-amber-300" />
-                <span>Request B2B Quote</span>
-              </button>
-            </div>
-          </div>
-        ))}
-        </div>
-      )}
+      </div>
 
       {/* Bulk RFQ Modal */}
       {activeRFQProduct && (

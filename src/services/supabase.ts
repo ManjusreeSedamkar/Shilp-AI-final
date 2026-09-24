@@ -210,12 +210,8 @@ export async function sendPhoneOTP(phone: string): Promise<{ normalizedPhone: st
     return { normalizedPhone, error: new Error('Please enter a valid phone number.') };
   }
 
-  // Development mode fallback if Supabase is not configured
   if (!supabase) {
-    const mockCode = '123456';
-    (globalThis as any).devOtp = { phone: normalizedPhone, code: mockCode };
-    console.info(`[Dev OTP] Phone: ${normalizedPhone}, Code: ${mockCode}`);
-    return { normalizedPhone, error: null };
+    return { normalizedPhone, error: new Error('Supabase is not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.') };
   }
 
   const { error } = await supabase.auth.signInWithOtp({ phone: normalizedPhone });
@@ -235,17 +231,8 @@ export async function verifyPhoneOTP(
     return { user: null, userId: null, error: new Error('Invalid phone number.') };
   }
 
-  // Development mode fallback if Supabase is not configured
   if (!supabase) {
-    const devOtp = (globalThis as any).devOtp;
-    if (devOtp && (devOtp.phone === normalizedPhone || devOtp.phone === phone) && devOtp.code === token) {
-      return {
-        user: { id: '00000000-0000-0000-0000-000000000101', phone: normalizedPhone },
-        userId: '00000000-0000-0000-0000-000000000101',
-        error: null,
-      };
-    }
-    return { user: null, userId: null, error: new Error('Invalid OTP code.') };
+    return { user: null, userId: null, error: new Error('Supabase is not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.') };
   }
 
   const { data, error } = await supabase.auth.verifyOtp({
@@ -522,9 +509,33 @@ export async function generateUniqueArtisanId(state: string): Promise<string> {
  * Save a product to Supabase. Falls back to localStorage on failure.
  */
 export async function saveProductToSupabase(product: ProductListing): Promise<string> {
+  let originalUrl = product.originalImageUrl ?? product.originalImage;
+  let enhancedUrl = product.enhancedImageUrl ?? product.enhancedImage;
+
+  if (supabase) {
+    try {
+      if (originalUrl && originalUrl.startsWith('data:')) {
+        const path = `products/${product.id}/original_${Date.now()}.jpg`;
+        originalUrl = await uploadImageToSupabase(originalUrl, 'product-images', path);
+      }
+      if (enhancedUrl && enhancedUrl.startsWith('data:')) {
+        const path = `products/${product.id}/enhanced_${Date.now()}.jpg`;
+        enhancedUrl = await uploadImageToSupabase(enhancedUrl, 'product-images', path);
+      }
+    } catch (err) {
+      console.warn('[Supabase Storage] Image upload exception for product:', err);
+    }
+  }
+
+  // Update in-memory product object URLs
+  product.originalImage = originalUrl;
+  product.originalImageUrl = originalUrl;
+  product.enhancedImage = enhancedUrl;
+  product.enhancedImageUrl = enhancedUrl;
+
   const productRow = {
     id: product.id,
-    artisan_id: null as string | null, // populated when user is authenticated
+    artisan_id: product.artisanId && isUuid(product.artisanId) ? product.artisanId : null,
     artisan_name: product.artisanName,
     state: product.state,
     title_en: product.titleEn,
@@ -535,8 +546,8 @@ export async function saveProductToSupabase(product: ProductListing): Promise<st
     color: product.color,
     production_days: product.productionDays,
     raw_material_cost: product.rawMaterialCost,
-    original_image_url: product.originalImageUrl ?? product.originalImage,
-    enhanced_image_url: product.enhancedImageUrl ?? product.enhancedImage,
+    original_image_url: originalUrl,
+    enhanced_image_url: enhancedUrl,
     has_background_removed: product.hasBackgroundRemoved,
     has_lighting_enhanced: product.hasLightingEnhanced,
     description_en: product.descriptionEn,
@@ -560,18 +571,12 @@ export async function saveProductToSupabase(product: ProductListing): Promise<st
 
       const { error } = await supabase.from('products').upsert(productRow, { onConflict: 'id' });
       if (!error) return product.id;
-      console.warn('[Supabase] saveProduct error, falling back:', error.message);
+      console.warn('[Supabase] saveProduct error:', error.message);
     } catch (err) {
-      console.warn('[Supabase] saveProduct exception, falling back:', err);
+      console.warn('[Supabase] saveProduct exception:', err);
     }
   }
 
-  // localStorage fallback
-  try {
-    const existing = JSON.parse(localStorage.getItem('shilp_ai_products') ?? '[]') as ProductListing[];
-    const filtered = existing.filter(p => p.id !== product.id);
-    localStorage.setItem('shilp_ai_products', JSON.stringify([product, ...filtered]));
-  } catch {}
   return product.id;
 }
 
@@ -792,11 +797,18 @@ export async function upsertConversation(
 
   // Map authenticated user ID to participant ID if needed
   if (currentUserId && isUuid(currentUserId)) {
-    if (!isUuid(buyerId) && user?.user_metadata?.role === 'buyer') {
+    if (!isUuid(buyerId) && (user?.user_metadata?.role === 'buyer' || !user?.user_metadata?.role)) {
       buyerId = currentUserId;
     }
     if (!isUuid(artisanId) && user?.user_metadata?.role === 'artisan') {
       artisanId = currentUserId;
+    }
+  }
+
+  if (!isUuid(artisanId) && artisanId) {
+    const profile = await fetchArtisanProfile(artisanId);
+    if (profile && isUuid(profile.id)) {
+      artisanId = profile.id;
     }
   }
 
@@ -1167,6 +1179,77 @@ export async function saveOrderToSupabase(order: {
     created_at: new Date().toISOString(),
   });
   return { error: error ? new Error(error.message) : null };
+}
+
+// ─── RFQ (Request For Quotation) ──────────────────────────────────────────────
+
+export interface SupabaseRFQ {
+  id: string;
+  buyer_id: string;
+  buyer_name?: string;
+  artisan_id: string | null;
+  product_id: string;
+  quantity: number;
+  message?: string;
+  status: 'pending' | 'accepted' | 'declined';
+  created_at: string;
+}
+
+export async function saveRFQToSupabase(rfq: {
+  id: string;
+  buyerId: string;
+  buyerName: string;
+  artisanId: string;
+  productId: string;
+  quantity: number;
+  message: string;
+  status?: 'pending' | 'accepted' | 'declined';
+}): Promise<{ error: Error | null }> {
+  if (!supabase) return { error: null };
+  const row = {
+    id: rfq.id,
+    buyer_id: rfq.buyerId,
+    buyer_name: rfq.buyerName,
+    artisan_id: isUuid(rfq.artisanId) ? rfq.artisanId : null,
+    product_id: rfq.productId,
+    quantity: rfq.quantity,
+    message: rfq.message,
+    status: rfq.status ?? 'pending',
+    created_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from('rfqs').insert(row);
+  if (error) {
+    console.warn('[Supabase] saveRFQ notice:', error.message);
+  }
+  return { error: error ? new Error(error.message) : null };
+}
+
+export async function fetchRFQsForUser(
+  userId: string,
+  userRole: 'artisan' | 'buyer'
+): Promise<SupabaseRFQ[]> {
+  if (!supabase || !userId) return [];
+  try {
+    const query = supabase.from('rfqs').select('*');
+    if (userRole === 'buyer') {
+      query.eq('buyer_id', userId);
+    } else {
+      if (isUuid(userId)) {
+        query.eq('artisan_id', userId);
+      } else {
+        return [];
+      }
+    }
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) {
+      console.warn('[Supabase] fetchRFQs error:', error.message);
+      return [];
+    }
+    return (data ?? []) as SupabaseRFQ[];
+  } catch (err) {
+    console.warn('[Supabase] fetchRFQs exception:', err);
+    return [];
+  }
 }
 
 // ─── Buyer Recommendations ────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import {
   isUuid,
   getCurrentSupabaseUser,
 } from '../services/supabase';
-import { askGemini, hasGeminiApiKey } from '../services/geminiService';
+import { askGemini, hasGeminiApiKey, generateArtisanBio } from '../services/geminiService';
 import VerificationBadge from './VerificationBadge';
 import ArtisanIDCard from './ArtisanIDCard';
 import { VerificationTier } from '../types';
@@ -64,7 +64,7 @@ interface ArtisanOnboardingProps {
 const ArtisanOnboarding: React.FC<ArtisanOnboardingProps> = ({ onClose, authenticatedUserId }) => {
   // ── Wizard state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<WizardStep>(
-    authenticatedUserId ? WizardStep.ProfileDetails : WizardStep.LanguageSelection
+    authenticatedUserId ? WizardStep.VerificationDocs : WizardStep.LanguageSelection
   );
   const [loading, setLoading] = useState(false);
 
@@ -212,21 +212,18 @@ const ArtisanOnboarding: React.FC<ArtisanOnboardingProps> = ({ onClose, authenti
   // ─── Step 6: AI-assisted bio ───────────────────────────────────────────────
 
   const handleGenerateBio = async () => {
-    if (!hasGeminiApiKey()) {
-      alert('Gemini API key not configured. Please add VITE_GEMINI_API_KEY to generate a bio.');
-      return;
-    }
     setGeneratingBio(true);
     try {
-      const prompt =
-        `Write a short, warm 2-sentence artisan bio (max 60 words) for an Indian craftsperson named "${profile.name || 'the artisan'}" ` +
-        `from ${profile.state || 'India'}, specialising in "${profile.craftCluster || 'traditional handloom & craft'}". ` +
-        `Write in first person. Highlight authentic craftsmanship, heritage preservation, and dedication to quality. Keep it suitable for a government handicraft marketplace profile.`;
-      const bio = await askGemini(prompt, 'en');
+      const bio = await generateArtisanBio(
+        profile.name || 'the artisan',
+        profile.state || 'India',
+        profile.craftCluster || 'traditional handloom & craft',
+        'en'
+      );
       setProfile((p) => ({ ...p, bio: bio.trim() }));
     } catch (e: any) {
       console.error(e);
-      alert(`Failed to generate bio: ${e?.message || 'Check Gemini API Key'}. You can type your bio manually.`);
+      alert(`Failed to generate bio: ${e?.message || 'AI service unavailable'}. You can type your bio manually.`);
     } finally {
       setGeneratingBio(false);
     }

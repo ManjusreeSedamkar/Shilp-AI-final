@@ -104,6 +104,7 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
   // Derived real business metrics (strictly 0 when no data; NO fake numbers)
   const totalEarnings = remoteAnalytics ? remoteAnalytics.totalEarnings : 0;
   const activeProducts = remoteAnalytics ? remoteAnalytics.activeProducts : products.length;
+  const totalSalesCount = remoteAnalytics ? remoteAnalytics.totalOrders : 0;
   const giCount = products.filter(p => p.giCertified).length;
   const inquiriesCount = conversations.length;
 
@@ -249,7 +250,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
                   <Award className="w-3 h-3 text-[#C85A32] dark:text-amber-400" />
                   <span>{artisanGiTagCraft.split('(')[0]} • GI Verified</span>
                 </span>
-                </span>
               </div>
 
               <p className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 mt-0.5 font-medium">
@@ -379,9 +379,8 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
       </div>
 
       {/* ============================================================
-          {/* ============================================================
-              Tutorial Div Box (Clickable -> Redirects to Tutorial Page)
-          ============================================================ */}
+          Tutorial Div Box (Clickable -> Redirects to Tutorial Page)
+      ============================================================ */}
           <div
             onClick={onOpenTutorials}
             className="cursor-pointer group relative overflow-hidden bg-[#231E1B] hover:bg-[#2A2420] border border-stone-800 p-4 sm:p-5 rounded-2xl sm:rounded-3xl text-white shadow-sm transition-all transform hover:-translate-y-0.5 w-full max-w-full"
@@ -431,7 +430,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
           {/* ============================================================
               2. Hero 2x2 Core Action Grid (Designed for Zero Prior Experience)
           ============================================================ */}
-      ============================================================ */}
       <div className="w-full max-w-full overflow-hidden">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs font-black text-[#A33F1B] uppercase tracking-wider flex items-center gap-1.5">
@@ -484,7 +482,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
               <h4 className="font-black text-stone-900 dark:text-white text-sm sm:text-base group-hover:text-[#C85A32] dark:group-hover:text-amber-300 transition-colors leading-tight">
                 ShilpSaathi
               </h4>
-              </h4>
               <p className="text-xs font-bold text-stone-600 dark:text-stone-300 mt-0.5">
                 Photo Studio
               </p>
@@ -536,7 +533,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
 
               <p className="text-[10px] sm:text-[11px] text-stone-500 dark:text-stone-400 mt-0.5 leading-tight line-clamp-2">
                 {translate(language, 'auto.english_hindi_videos.41')}
-              </p>
               </p>
               <span className="inline-block text-[10px] text-stone-500 dark:text-stone-400 mt-1.5 bg-[#FAF7F2] dark:bg-[#0F172A] px-2 py-0.5 rounded-full border border-[#EADCD5] dark:border-stone-800">
                 {language === 'hi' ? '24/7 कारीगर साथी' : '24/7 AI Companion'}
@@ -636,19 +632,9 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
                 </button>
               </div>
             </div>
-              </div>
-              <p className="text-[11px] sm:text-xs text-stone-600 dark:text-stone-300 mt-0.5 font-normal leading-tight">
-                {language === 'hi'
-                  ? 'आवाज़ से सामान चढ़ाना, फोटो साफ करना व बाज़ार भाव समझना सीखें'
-                  : 'Step-by-step videos on voice cataloging, photo cleanup & fair price setting'}
-              </p>
-            </div>
           </div>
-          <div className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-[#C85A32] text-white text-xs font-bold shadow-2xs group-hover:bg-[#B84E28] transition-all shrink-0 self-start sm:self-auto">
-            <Play className="w-3.5 h-3.5 fill-current text-current" />
-            <span>{language === 'hi' ? 'वीडियो चलाएं' : 'Watch Videos'}</span>
-          </div>
-        </div>
+        )}
+      </div>
 
         {/* Analytics Cards — Driven strictly by real data */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -689,9 +675,7 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
               {giCount > 0 ? `${giCount} GI Certified` : '0 GI Certified'}
             </span>
           </div>
-          </div>
         </div>
-      </div>
 
       {/* ============================================================
           4. The Signature Terracotta Monthly Earnings & Stats Banner
@@ -781,9 +765,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
 
           </div>
         </div>
-      </div>
-          </div>
-        </div>
 
         {/* ShilpSaathi Market Recommendation based on REAL data */}
         <div className="mt-4 pt-3.5 border-t border-[#ECCFBF] dark:border-white/15 flex items-start gap-2.5 text-xs text-stone-800 dark:text-white/95 bg-white/70 dark:bg-black/25 p-3 rounded-2xl">
@@ -800,7 +781,6 @@ export const ArtisanDashboard: React.FC<ArtisanDashboardProps> = ({
               {getShilpSaathiRecommendation()}
             </p>
           </div>
-        </div>
         </div>
       </div>
 

@@ -1,12 +1,13 @@
 import { Language, CraftCategory } from '../types';
 import { getSpeechLangCode } from './translations';
+import { supabase } from './supabase';
 
 /**
  * SHILP-AI Gemini API Service
  * 
- * Uses Google Gemini API for the Copilot chatbot.
- * API key is read from environment variable VITE_GEMINI_API_KEY (secure, not in frontend code or GitHub).
- * Falls back to localStorage for user-provided key via the AI Engines settings modal.
+ * Uses Google Gemini API for the Copilot chatbot and bio generation.
+ * API key is read from environment variable VITE_GEMINI_API_KEY.
+ * Automatically falls back to Supabase Edge Function (OpenRouter) if Gemini returns 503/429.
  */
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent';
@@ -23,7 +24,7 @@ export function getGeminiApiKey(): string {
 }
 
 export function hasGeminiApiKey(): boolean {
-  return getGeminiApiKey().length > 0;
+  return getGeminiApiKey().length > 0 || Boolean(supabase);
 }
 
 export function getOpenRouterApiKey(): string {
@@ -60,7 +61,8 @@ interface GeminiResponse {
 }
 
 /**
- * Send a prompt to Gemini and get a response
+ * Send a prompt to Gemini and get a response.
+ * Falls back to OpenRouter Edge Function if direct Gemini returns 503/429/error.
  */
 export async function askGemini(
   prompt: string,
@@ -68,9 +70,6 @@ export async function askGemini(
   systemContext?: string
 ): Promise<string> {
   const apiKey = getGeminiApiKey();
-  if (!apiKey) {
-    throw new Error('Gemini API key not configured. Please add it in AI Engines settings or set VITE_GEMINI_API_KEY environment variable.');
-  }
 
   const langName = getLanguageNameForPrompt(language);
   const systemPrompt = systemContext || 
@@ -80,45 +79,58 @@ export async function askGemini(
 
   const fullPrompt = `${systemPrompt}\n\nUser question: ${prompt}`;
 
-  const requestBody: GeminiRequest = {
-    contents: [
-      {
-        parts: [{ text: fullPrompt }]
+  if (apiKey) {
+    const requestBody: GeminiRequest = {
+      contents: [
+        {
+          parts: [{ text: fullPrompt }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 1024,
+        topP: 0.9
       }
-    ],
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 1024,
-      topP: 0.9
+    };
+
+    try {
+      const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (response.ok) {
+        const data: GeminiResponse = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text.trim();
+      } else {
+        const errorData = await response.json().catch(() => null);
+        console.warn(`Direct Gemini API returned status ${response.status}:`, errorData?.error?.message);
+      }
+    } catch (error) {
+      console.warn('Direct Gemini API fetch error:', error);
     }
-  };
-
-  try {
-    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      throw new Error(errorData?.error?.message || `Gemini API error: ${response.status}`);
-    }
-
-    const data: GeminiResponse = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!text) {
-      throw new Error('No response from Gemini API');
-    }
-
-    return text.trim();
-  } catch (error) {
-    console.error('Gemini API error:', error);
-    throw error;
   }
+
+  // Fallback: Supabase Edge Function (ai-services) using OPENROUTER_API_KEY secret
+  if (supabase) {
+    try {
+      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+        body: { task: 'shilpsaathi', prompt: fullPrompt, language },
+      });
+      if (!edgeErr && data?.result) {
+        return data.result.trim();
+      }
+      if (edgeErr) console.warn('ai-services Edge Function notice:', edgeErr.message);
+    } catch (fallbackErr) {
+      console.warn('ai-services Edge Function fallback exception:', fallbackErr);
+    }
+  }
+
+  throw new Error('Gemini & OpenRouter services are currently unavailable. You can enter your bio manually.');
 }
 
 /**
@@ -299,15 +311,60 @@ export interface VisualAnalysisResult {
 }
 
 /**
- * Perform visual product understanding using Gemini Vision
+ * Generate artisan bio using Gemini API or Supabase Edge Function fallback (task: "artisan_bio")
+ */
+export async function generateArtisanBio(
+  name: string,
+  state: string,
+  craftCluster: string,
+  language: Language = 'en'
+): Promise<string> {
+  const prompt =
+    `Write a short, warm 2-sentence artisan bio (max 60 words) for an Indian craftsperson named "${name || 'the artisan'}" ` +
+    `from ${state || 'India'}, specialising in "${craftCluster || 'traditional handloom & craft'}". ` +
+    `Write in first person. Highlight authentic craftsmanship, heritage preservation, and dedication to quality. Keep it suitable for a government handicraft marketplace profile.`;
+
+  const apiKey = getGeminiApiKey();
+  if (apiKey) {
+    try {
+      const bio = await askGeminiMultimodal(prompt);
+      if (bio) return bio.trim();
+    } catch (e) {
+      console.warn('Direct Gemini API bio generation notice:', e);
+    }
+  }
+
+  if (supabase) {
+    try {
+      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+        body: {
+          task: 'artisan_bio',
+          prompt,
+          language,
+          data: { name, state, craftCluster },
+        },
+      });
+      if (!edgeErr && data?.result) {
+        return data.result.trim();
+      }
+      if (edgeErr) console.warn('ai-services Edge Function bio notice:', edgeErr.message);
+    } catch (fallbackErr) {
+      console.warn('ai-services Edge Function bio fallback exception:', fallbackErr);
+    }
+  }
+
+  throw new Error('Bio generation service is currently unavailable. You can enter your bio manually.');
+}
+
+/**
+ * Perform visual product understanding using Gemini Vision, with Supabase Edge Function fallback
  */
 export async function analyzeImageVisuals(
   imageInput: string
 ): Promise<VisualAnalysisResult | null> {
-  if (!hasGeminiApiKey() || !imageInput) return null;
+  if (!imageInput) return null;
 
   const imageData = await urlOrDataUrlToBase64(imageInput);
-  if (!imageData) return null;
 
   const prompt = `Analyze this Indian handicraft product image and identify its visual attributes.
 
@@ -323,42 +380,66 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
   "keywords": ["keyword1", "keyword2", "keyword3"]
 }`;
 
-  try {
-    const rawResult = await askGeminiMultimodal(prompt, imageData);
-    const cleaned = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+  if (getGeminiApiKey() && imageData) {
+    try {
+      const rawResult = await askGeminiMultimodal(prompt, imageData);
+      const cleaned = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+      const parsed = JSON.parse(cleaned);
 
-    if (parsed && parsed.visualObjectType) {
-      const validCategories: CraftCategory[] = [
-        'Textiles & Handloom',
-        'Clay & Terracotta',
-        'Metalcraft & Dhokra',
-        'Traditional Painting',
-        'Woodcraft & Carving',
-        'Leather & Footwear',
-        'Handmade Jewelry',
-        'Other Heritage Craft'
-      ];
-      const category: CraftCategory = validCategories.includes(parsed.craftCategorySuggestion)
-        ? parsed.craftCategorySuggestion
-        : 'Other Heritage Craft';
-
-      return {
-        visualObjectType: parsed.visualObjectType || 'Handicraft Product',
-        craftCategorySuggestion: category,
-        apparentMaterial: parsed.apparentMaterial || 'Authentic Artisan Material',
-        visibleColors: parsed.visibleColors || 'Natural Finish',
-        visiblePatternsMotifs: parsed.visiblePatternsMotifs || 'Traditional Motifs',
-        visibleBorderColor: (parsed.visibleBorderColor && parsed.visibleBorderColor !== 'null') ? parsed.visibleBorderColor : undefined,
-        confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
-        keywords: Array.isArray(parsed.keywords) ? parsed.keywords : []
-      };
+      if (parsed && parsed.visualObjectType) {
+        return parseVisualAnalysisResult(parsed);
+      }
+    } catch (err) {
+      console.warn('Gemini direct vision analysis notice:', err);
     }
-  } catch (err) {
-    console.warn('Gemini vision analysis notice:', err);
+  }
+
+  if (supabase) {
+    try {
+      const formattedImage = imageData ? `data:${imageData.mimeType};base64,${imageData.data}` : imageInput;
+      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+        body: { task: 'analyze_image', prompt, imageInput: formattedImage }
+      });
+      if (!edgeErr && data?.result) {
+        const cleaned = data.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        if (parsed && parsed.visualObjectType) {
+          return parseVisualAnalysisResult(parsed);
+        }
+      }
+    } catch (edgeErr) {
+      console.warn('ai-services Edge Function analyze_image notice:', edgeErr);
+    }
   }
 
   return null;
+}
+
+function parseVisualAnalysisResult(parsed: any): VisualAnalysisResult {
+  const validCategories: CraftCategory[] = [
+    'Textiles & Handloom',
+    'Clay & Terracotta',
+    'Metalcraft & Dhokra',
+    'Traditional Painting',
+    'Woodcraft & Carving',
+    'Leather & Footwear',
+    'Handmade Jewelry',
+    'Other Heritage Craft'
+  ];
+  const category: CraftCategory = validCategories.includes(parsed.craftCategorySuggestion)
+    ? parsed.craftCategorySuggestion
+    : 'Other Heritage Craft';
+
+  return {
+    visualObjectType: parsed.visualObjectType || 'Handicraft Product',
+    craftCategorySuggestion: category,
+    apparentMaterial: parsed.apparentMaterial || 'Authentic Artisan Material',
+    visibleColors: parsed.visibleColors || 'Natural Finish',
+    visiblePatternsMotifs: parsed.visiblePatternsMotifs || 'Traditional Motifs',
+    visibleBorderColor: (parsed.visibleBorderColor && parsed.visibleBorderColor !== 'null') ? parsed.visibleBorderColor : undefined,
+    confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
+    keywords: Array.isArray(parsed.keywords) ? parsed.keywords : []
+  };
 }
 
 /**
@@ -524,32 +605,35 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
         };
       }
     } catch (err) {
-      console.warn('[Shilp-AI] Gemini description generation failed after retries; trying OpenRouter.');
+      console.warn('[Shilp-AI] Gemini description generation failed after retries; trying OpenRouter via Edge Function.');
     }
   }
 
-  // 2. Secondary fallback provider: OpenRouter
-  if (hasOpenRouterApiKey()) {
+  // 2. Secondary fallback provider: Supabase Edge Function (ai-services)
+  if (supabase) {
     try {
-      const rawResult = await askOpenRouter(prompt);
-      const cleanedJsonStr = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-      const parsed = JSON.parse(cleanedJsonStr);
-
-      if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
-        console.log('[Shilp-AI] OpenRouter description generation succeeded.');
-        return {
-          titleEn: parsed.titleEn || attributes.titleEn,
-          titleHi: parsed.titleHi || attributes.titleHi,
-          descriptionEn: parsed.descriptionEn || '',
-          descriptionHi: parsed.descriptionHi || '',
-          culturalContext: parsed.culturalContext || undefined,
-          seoKeywords: Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined,
-          searchTags: Array.isArray(parsed.searchTags) ? parsed.searchTags : (Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined),
-          metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
-        };
+      const formattedImage = imageData ? `data:${imageData.mimeType};base64,${imageData.data}` : imageInput;
+      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+        body: { task: 'product_description', prompt, data: attributes, imageInput: formattedImage },
+      });
+      if (!edgeErr && data?.result) {
+        const cleanedJsonStr = data.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(cleanedJsonStr);
+        if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
+          return {
+            titleEn: parsed.titleEn || attributes.titleEn,
+            titleHi: parsed.titleHi || attributes.titleHi,
+            descriptionEn: parsed.descriptionEn || '',
+            descriptionHi: parsed.descriptionHi || '',
+            culturalContext: parsed.culturalContext || undefined,
+            seoKeywords: Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined,
+            searchTags: Array.isArray(parsed.searchTags) ? parsed.searchTags : (Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined),
+            metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
+          };
+        }
       }
-    } catch (openRouterErr) {
-      console.warn('[Shilp-AI] OpenRouter failed; using structured fallback.');
+    } catch (edgeErr) {
+      console.warn('[Shilp-AI] ai-services Edge Function product_description notice:', edgeErr);
     }
   }
 
