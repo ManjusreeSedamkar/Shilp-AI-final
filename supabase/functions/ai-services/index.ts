@@ -98,6 +98,19 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
       ];
     }
 
+    const selectedModels = imageInput
+      ? [
+          "meta-llama/llama-3.2-11b-vision-instruct:free",
+          "google/gemini-2.0-flash-lite-preview-02-05:free",
+          "qwen/qwen-2.5-vl-72b-instruct:free"
+        ]
+      : [
+          "meta-llama/llama-3.3-70b-instruct:free",
+          "google/gemini-2.0-flash-lite-preview-02-05:free",
+          "deepseek/deepseek-r1:free",
+          "qwen/qwen-2.5-72b-instruct:free"
+        ];
+
     const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -107,11 +120,7 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
         "X-Title": "SHILP-AI Marketplace",
       },
       body: JSON.stringify({
-        models: [
-          "google/gemma-4-26b-a4b-it:free",
-          "nvidia/nemotron-3-ultra-550b-a55b:free",
-          "inclusionai/ling-3.0-flash-sante:free"
-        ],
+        models: selectedModels,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent },
