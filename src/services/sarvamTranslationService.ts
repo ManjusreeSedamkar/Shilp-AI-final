@@ -150,7 +150,7 @@ export function toSarvamLanguageCode(lang: string): string {
     sa: 'sa-IN',
     mai: 'mai-IN',
     kok: 'kok-IN',
-    ne: 'ne-NP',
+    ne: 'ne-IN',
     sd: 'sd-IN',
     doi: 'doi-IN',
     brx: 'brx-IN',
@@ -208,10 +208,10 @@ async function callSupabaseTranslateFunction(
         const errorJson = await response.json().catch(() => null);
         const errMsg = errorJson?.error || errorJson?.message || `HTTP ${response.status}`;
         
-        if (response.status === 503 || response.status === 429 || response.status === 502) {
+        if (response.status === 429 || response.status === 502 || response.status === 503) {
           lastError = new Error(`Supabase translate function error: ${errMsg}`);
           if (attempt < maxRetries) {
-            const delay = Math.pow(2, attempt - 1) * 350;
+            const delay = Math.pow(2, attempt - 1) * 1000;
             await new Promise((resolve) => setTimeout(resolve, delay));
             continue;
           }
@@ -232,11 +232,16 @@ async function callSupabaseTranslateFunction(
       throw new Error('Missing translated_text in response from Supabase function.');
     } catch (err: unknown) {
       clearTimeout(timeoutId);
+      const isHttpError = err instanceof Error && err.message.startsWith('Supabase translate function error:');
+      if (isHttpError) {
+        throw err;
+      }
+
       const isAbort = err instanceof Error && err.name === 'AbortError';
       lastError = isAbort ? new Error('Supabase translate function request timed out.') : (err instanceof Error ? err : new Error(String(err)));
       
       if (attempt < maxRetries) {
-        const delay = Math.pow(2, attempt - 1) * 350;
+        const delay = Math.pow(2, attempt - 1) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -304,8 +309,8 @@ export async function translateBatchWithSarvam(
     return result;
   }
 
-  // Concurrency limit of 4 parallel requests to prevent network throttling
-  const CONCURRENCY = 4;
+  // Concurrency limit of 2 parallel requests to prevent network throttling
+  const CONCURRENCY = 2;
   for (let i = 0; i < phrases.length; i += CONCURRENCY) {
     const slice = phrases.slice(i, i + CONCURRENCY);
     const promises = slice.map(async (phrase) => {
