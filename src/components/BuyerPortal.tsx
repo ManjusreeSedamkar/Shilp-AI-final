@@ -86,6 +86,23 @@ const LazyProductImage: React.FC<{
   );
 };
 
+const normalizeStateName = (state: string): string => {
+  return (state || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+};
+
+const isStateMatch = (productState: string, targetStates: string[]): boolean => {
+  if (targetStates.length === 0) return true;
+  const normProductState = normalizeStateName(productState);
+  return targetStates.some(ts => {
+    const normTarget = normalizeStateName(ts);
+    return normProductState === normTarget || normProductState.includes(normTarget) || normTarget.includes(normProductState);
+  });
+};
+
 export const BuyerPortal: React.FC<BuyerPortalProps> = ({
   products,
   onSelectProduct,
@@ -253,7 +270,7 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
 
       // 4. State Filter
       if (selectedStates.length > 0) {
-        if (!selectedStates.includes(p.state)) return false;
+        if (!isStateMatch(p.state, selectedStates)) return false;
       }
 
       // 5. Material Filter
@@ -936,14 +953,26 @@ export const BuyerPortal: React.FC<BuyerPortalProps> = ({
                   No artifacts match your selected filter criteria
                 </h3>
                 <p className="text-xs text-stone-500 max-w-md mx-auto">
-                  Try unchecking some category boxes or clearing your search term to see more verified heritage items from the national repository.
+                  {selectedStates.length > 0
+                    ? `No verified products found for selected state filter (${selectedStates.join(', ')}). Try clearing the state filter or exploring other heritage regions.`
+                    : 'Try unchecking some category boxes or clearing your search term to see more verified heritage items from the national repository.'}
                 </p>
-                <button
-                  onClick={clearAllFilters}
-                  className="px-5 py-2.5 rounded-xl bg-stone-900 dark:bg-amber-500 text-white dark:text-stone-950 font-bold text-xs shadow-xs"
-                >
-                  Clear All Filters
-                </button>
+                <div className="flex items-center justify-center gap-3">
+                  {selectedStates.length > 0 && (
+                    <button
+                      onClick={() => setSelectedStates([])}
+                      className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors"
+                    >
+                      Clear State Filter
+                    </button>
+                  )}
+                  <button
+                    onClick={clearAllFilters}
+                    className="px-5 py-2.5 rounded-xl bg-stone-900 dark:bg-amber-500 text-white dark:text-stone-950 font-bold text-xs shadow-xs"
+                  >
+                    Clear All Filters
+                  </button>
+                </div>
               </div>
             )}
 

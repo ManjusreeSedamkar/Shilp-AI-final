@@ -15,12 +15,13 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Get API key from environment variable (Vite) or localStorage
 export function getGeminiApiKey(): string {
-  // Vite exposes env vars prefixed with VITE_ via import.meta.env
   const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
-  if (envKey) return envKey;
+  if (envKey && envKey.startsWith('AIzaSy')) return envKey;
   
-  // Fallback to localStorage (user can set via AI Engines modal)
-  return localStorage.getItem('gemini_api_key') || '';
+  const localKey = localStorage.getItem('gemini_api_key') || '';
+  if (localKey && localKey.startsWith('AIzaSy')) return localKey;
+
+  return '';
 }
 
 export function hasGeminiApiKey(): boolean {
