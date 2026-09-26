@@ -39,6 +39,22 @@ export function hasOpenRouterApiKey(): boolean {
   return getOpenRouterApiKey().length > 0;
 }
 
+export function deduplicateKeywords(keywords?: string[]): string[] {
+  if (!keywords || !Array.isArray(keywords)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const kw of keywords) {
+    if (!kw || typeof kw !== 'string') continue;
+    const trimmed = kw.trim();
+    const lower = trimmed.toLowerCase();
+    if (trimmed && !seen.has(lower)) {
+      seen.add(lower);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
 interface GeminiRequest {
   contents: {
     parts: { text: string }[];
@@ -70,8 +86,6 @@ export async function askGemini(
   language: Language = 'en',
   systemContext?: string
 ): Promise<string> {
-  const apiKey = getGeminiApiKey();
-
   const langName = getLanguageNameForPrompt(language);
   const systemPrompt = systemContext || 
     `You are SHILP-AI Copilot, a helpful assistant for Indian artisans and buyers on the MoSJE (Ministry of Social Justice and Empowerment) handicraft marketplace. ` +
@@ -80,6 +94,23 @@ export async function askGemini(
 
   const fullPrompt = `${systemPrompt}\n\nUser question: ${prompt}`;
 
+  // 1. Primary secure path: Supabase Edge Function (ai-services) using OPENROUTER_API_KEY secret
+  if (supabase) {
+    try {
+      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+        body: { task: 'shilpsaathi', prompt: fullPrompt, language },
+      });
+      if (!edgeErr && data?.result) {
+        return data.result.trim();
+      }
+      if (edgeErr) console.warn('ai-services Edge Function notice:', edgeErr.message);
+    } catch (fallbackErr) {
+      console.warn('ai-services Edge Function fallback exception:', fallbackErr);
+    }
+  }
+
+  // 2. Secondary fallback path: Direct Gemini API key (if provided)
+  const apiKey = getGeminiApiKey();
   if (apiKey) {
     const requestBody: GeminiRequest = {
       contents: [
@@ -113,21 +144,6 @@ export async function askGemini(
       }
     } catch (error) {
       console.warn('Direct Gemini API fetch error:', error);
-    }
-  }
-
-  // Fallback: Supabase Edge Function (ai-services) using OPENROUTER_API_KEY secret
-  if (supabase) {
-    try {
-      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
-        body: { task: 'shilpsaathi', prompt: fullPrompt, language },
-      });
-      if (!edgeErr && data?.result) {
-        return data.result.trim();
-      }
-      if (edgeErr) console.warn('ai-services Edge Function notice:', edgeErr.message);
-    } catch (fallbackErr) {
-      console.warn('ai-services Edge Function fallback exception:', fallbackErr);
     }
   }
 
@@ -181,6 +197,9 @@ export async function urlOrDataUrlToBase64(imageUrl: string): Promise<{ mimeType
     if (imageUrl.startsWith('data:image/')) {
       const match = imageUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
       if (match) {
+        if ((import.meta as any).env?.DEV) {
+          console.log('[Shilp-AI] Vision image conversion:', { type: 'Data URL', mimeType: match[1] });
+        }
         return {
           mimeType: match[1],
           data: match[2]
@@ -188,9 +207,28 @@ export async function urlOrDataUrlToBase64(imageUrl: string): Promise<{ mimeType
       }
     }
 
-    // Relative or HTTP URL
-    const response = await fetch(imageUrl);
-    if (!response.ok) return null;
+    // Resolve relative or HTTP URL against window.location.origin
+    let fetchUrl = imageUrl;
+    const isHttp = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+    if (!isHttp && !imageUrl.startsWith('data:')) {
+      const origin = typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'http://localhost:3000';
+      fetchUrl = new URL(imageUrl, origin).toString();
+    }
+
+    if ((import.meta as any).env?.DEV) {
+      console.log('[Shilp-AI] Vision image conversion:', {
+        type: isHttp ? 'Absolute HTTP URL' : 'Relative URL resolved against origin',
+        resolvedUrl: fetchUrl
+      });
+    }
+
+    const response = await fetch(fetchUrl);
+    if (!response.ok) {
+      console.warn('[Shilp-AI] Vision image fetch failed:', response.status, fetchUrl);
+      return null;
+    }
     const blob = await response.blob();
     
     return new Promise((resolve) => {
@@ -211,7 +249,7 @@ export async function urlOrDataUrlToBase64(imageUrl: string): Promise<{ mimeType
       reader.readAsDataURL(blob);
     });
   } catch (err) {
-    console.warn('Failed to convert image for Gemini multimodal input:', err);
+    console.warn('[Shilp-AI] Failed to convert image for vision input:', err);
     return null;
   }
 }
@@ -357,6 +395,19 @@ export async function generateArtisanBio(
   throw new Error('Bio generation service is currently unavailable. You can enter your bio manually.');
 }
 
+export function createFallbackVisualAnalysis(): VisualAnalysisResult {
+  return {
+    visualObjectType: 'Handicraft Product',
+    craftCategorySuggestion: 'Other Heritage Craft',
+    apparentMaterial: 'Authentic Artisan Material',
+    visibleColors: 'Natural Finish',
+    visiblePatternsMotifs: 'Traditional Motifs',
+    visibleBorderColor: undefined,
+    confidence: 'low',
+    keywords: ['Handmade in India', 'Heritage Craft']
+  };
+}
+
 /**
  * Perform visual product understanding using Gemini Vision, with Supabase Edge Function fallback
  */
@@ -364,6 +415,14 @@ export async function analyzeImageVisuals(
   imageInput: string
 ): Promise<VisualAnalysisResult | null> {
   if (!imageInput) return null;
+
+  if ((import.meta as any).env?.DEV) {
+    console.log('[Shilp-AI] Vision input:', {
+      hasImageInput: Boolean(imageInput),
+      inputLength: imageInput.length,
+      isDataUrl: imageInput.startsWith('data:')
+    });
+  }
 
   const imageData = await urlOrDataUrlToBase64(imageInput);
 
@@ -381,6 +440,46 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
   "keywords": ["keyword1", "keyword2", "keyword3"]
 }`;
 
+  // 1. Primary secure path: Supabase Edge Function (ai-services)
+  if (supabase) {
+    try {
+      const formattedImage = imageData ? `data:${imageData.mimeType};base64,${imageData.data}` : imageInput;
+      const edgePromise = supabase.functions.invoke('ai-services', {
+        body: { task: 'analyze_image', prompt, imageInput: formattedImage }
+      });
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Edge function timeout')), 4000));
+      const { data, error: edgeErr } = await Promise.race([edgePromise, timeoutPromise]) as any;
+
+      if ((import.meta as any).env?.DEV) {
+        console.log('[Shilp-AI] Vision Edge Function response:', {
+          hasData: Boolean(data),
+          hasResult: Boolean(data?.result),
+          success: data?.success,
+          error: edgeErr?.message || data?.error
+        });
+      }
+
+      if (!edgeErr && data?.result) {
+        const cleaned = data.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        if (parsed && parsed.visualObjectType) {
+          const result = parseVisualAnalysisResult(parsed);
+          if ((import.meta as any).env?.DEV) {
+            console.log('[Shilp-AI] Vision parsed result:', {
+              visualObjectType: result.visualObjectType,
+              confidence: result.confidence,
+              category: result.craftCategorySuggestion
+            });
+          }
+          return result;
+        }
+      }
+    } catch (edgeErr) {
+      console.warn('[Shilp-AI] ai-services Edge Function analyze_image notice:', edgeErr);
+    }
+  }
+
+  // 2. Secondary path: Direct Gemini API key
   if (getGeminiApiKey() && imageData) {
     try {
       const rawResult = await askGeminiMultimodal(prompt, imageData);
@@ -388,32 +487,29 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
       const parsed = JSON.parse(cleaned);
 
       if (parsed && parsed.visualObjectType) {
-        return parseVisualAnalysisResult(parsed);
+        const result = parseVisualAnalysisResult(parsed);
+        if ((import.meta as any).env?.DEV) {
+          console.log('[Shilp-AI] Vision parsed result:', {
+            visualObjectType: result.visualObjectType,
+            confidence: result.confidence,
+            category: result.craftCategorySuggestion
+          });
+        }
+        return result;
       }
     } catch (err) {
-      console.warn('Gemini direct vision analysis notice:', err);
+      console.warn('[Shilp-AI] Gemini direct vision analysis notice:', err);
     }
   }
 
-  if (supabase) {
-    try {
-      const formattedImage = imageData ? `data:${imageData.mimeType};base64,${imageData.data}` : imageInput;
-      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
-        body: { task: 'analyze_image', prompt, imageInput: formattedImage }
-      });
-      if (!edgeErr && data?.result) {
-        const cleaned = data.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-        const parsed = JSON.parse(cleaned);
-        if (parsed && parsed.visualObjectType) {
-          return parseVisualAnalysisResult(parsed);
-        }
-      }
-    } catch (edgeErr) {
-      console.warn('ai-services Edge Function analyze_image notice:', edgeErr);
-    }
+  // 3. Safe low-confidence fallback (never return null when imageInput exists)
+  if ((import.meta as any).env?.DEV) {
+    console.log('[Shilp-AI] Vision fallback used:', {
+      reason: 'AI vision response unparseable or services unavailable'
+    });
   }
 
-  return null;
+  return createFallbackVisualAnalysis();
 }
 
 function parseVisualAnalysisResult(parsed: any): VisualAnalysisResult {
@@ -431,6 +527,8 @@ function parseVisualAnalysisResult(parsed: any): VisualAnalysisResult {
     ? parsed.craftCategorySuggestion
     : 'Other Heritage Craft';
 
+  const rawKeywords = Array.isArray(parsed.keywords) ? parsed.keywords : [];
+
   return {
     visualObjectType: parsed.visualObjectType || 'Handicraft Product',
     craftCategorySuggestion: category,
@@ -439,7 +537,7 @@ function parseVisualAnalysisResult(parsed: any): VisualAnalysisResult {
     visiblePatternsMotifs: parsed.visiblePatternsMotifs || 'Traditional Motifs',
     visibleBorderColor: (parsed.visibleBorderColor && parsed.visibleBorderColor !== 'null') ? parsed.visibleBorderColor : undefined,
     confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
-    keywords: Array.isArray(parsed.keywords) ? parsed.keywords : []
+    keywords: deduplicateKeywords(rawKeywords)
   };
 }
 
@@ -513,7 +611,17 @@ export async function generateCulturalDescription(
   diwaliContext: string,
   imageInput?: string
 ): Promise<CulturallyGroundedDescriptionResponse | null> {
-  const imageData = imageInput ? await urlOrDataUrlToBase64(imageInput) : null;
+  let imageData = null;
+  if (imageInput) {
+    try {
+      imageData = await Promise.race([
+        urlOrDataUrlToBase64(imageInput),
+        new Promise<null>(r => setTimeout(() => r(null), 2000))
+      ]);
+    } catch {
+      imageData = null;
+    }
+  }
 
   const GENERIC_PLACEHOLDERS = [
     'Traditional Handcrafted Artistry',
@@ -586,49 +694,33 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
   "metaDescription": "SEO-friendly summary under 160 characters for buyer discovery."
 }`;
 
-  // 1. Primary provider: Gemini
-  if (hasGeminiApiKey()) {
-    try {
-      const rawResult = await askGeminiMultimodal(prompt, imageData);
-      const cleanedJsonStr = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-      const parsed = JSON.parse(cleanedJsonStr);
-
-      if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
-        return {
-          titleEn: parsed.titleEn || attributes.titleEn,
-          titleHi: parsed.titleHi || attributes.titleHi,
-          descriptionEn: parsed.descriptionEn || '',
-          descriptionHi: parsed.descriptionHi || '',
-          culturalContext: parsed.culturalContext || undefined,
-          seoKeywords: Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined,
-          searchTags: Array.isArray(parsed.searchTags) ? parsed.searchTags : (Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined),
-          metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
-        };
-      }
-    } catch (err) {
-      console.warn('[Shilp-AI] Gemini description generation failed after retries; trying OpenRouter via Edge Function.');
-    }
-  }
-
-  // 2. Secondary fallback provider: Supabase Edge Function (ai-services)
+  // 1. Primary provider: Supabase Edge Function (ai-services) using OPENROUTER_API_KEY secret
   if (supabase) {
     try {
       const formattedImage = imageData ? `data:${imageData.mimeType};base64,${imageData.data}` : imageInput;
-      const { data, error: edgeErr } = await supabase.functions.invoke('ai-services', {
+      const edgePromise = supabase.functions.invoke('ai-services', {
         body: { task: 'product_description', prompt, data: attributes, imageInput: formattedImage },
       });
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Edge function timeout')), 2500));
+      const { data, error: edgeErr } = await Promise.race([edgePromise, timeoutPromise]) as any;
+
       if (!edgeErr && data?.result) {
         const cleanedJsonStr = data.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
         const parsed = JSON.parse(cleanedJsonStr);
         if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
+          const rawKeywords = Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined;
+          const rawTags = Array.isArray(parsed.searchTags) ? parsed.searchTags : rawKeywords;
+          const dedupedKeywords = rawKeywords ? deduplicateKeywords(rawKeywords) : undefined;
+          const dedupedTags = rawTags ? deduplicateKeywords(rawTags) : dedupedKeywords;
+
           return {
             titleEn: parsed.titleEn || attributes.titleEn,
             titleHi: parsed.titleHi || attributes.titleHi,
             descriptionEn: parsed.descriptionEn || '',
             descriptionHi: parsed.descriptionHi || '',
             culturalContext: parsed.culturalContext || undefined,
-            seoKeywords: Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined,
-            searchTags: Array.isArray(parsed.searchTags) ? parsed.searchTags : (Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined),
+            seoKeywords: dedupedKeywords,
+            searchTags: dedupedTags,
             metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
           };
         }
@@ -638,17 +730,80 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
     }
   }
 
-  // 3. Final fallback: structured deterministic description
-  return buildFallbackDescription(attributes);
+  // 2. Secondary fallback provider: Direct Gemini
+  if (hasGeminiApiKey()) {
+    try {
+      const geminiPromise = askGeminiMultimodal(prompt, imageData);
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini API timeout')), 2500));
+      const rawResult = await Promise.race([geminiPromise, timeoutPromise]);
+      const cleanedJsonStr = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+      const parsed = JSON.parse(cleanedJsonStr);
+
+      if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
+        const rawKeywords = Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined;
+        const rawTags = Array.isArray(parsed.searchTags) ? parsed.searchTags : rawKeywords;
+        const dedupedKeywords = rawKeywords ? deduplicateKeywords(rawKeywords) : undefined;
+        const dedupedTags = rawTags ? deduplicateKeywords(rawTags) : dedupedKeywords;
+
+        return {
+          titleEn: parsed.titleEn || attributes.titleEn,
+          titleHi: parsed.titleHi || attributes.titleHi,
+          descriptionEn: parsed.descriptionEn || '',
+          descriptionHi: parsed.descriptionHi || '',
+          culturalContext: parsed.culturalContext || undefined,
+          seoKeywords: dedupedKeywords,
+          searchTags: dedupedTags,
+          metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
+        };
+      }
+    } catch (err) {
+      console.warn('[Shilp-AI] Gemini description generation failed after retries.');
+    }
+  }
+
+  // 3. Tertiary fallback provider: Direct OpenRouter
+  if (hasOpenRouterApiKey()) {
+    try {
+      const openRouterPromise = askOpenRouter(prompt);
+      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('OpenRouter API timeout')), 2500));
+      const rawResult = await Promise.race([openRouterPromise, timeoutPromise]);
+      const cleanedJsonStr = rawResult.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+      const parsed = JSON.parse(cleanedJsonStr);
+
+      if (parsed && (parsed.descriptionEn || parsed.descriptionHi)) {
+        const rawKeywords = Array.isArray(parsed.seoKeywords) ? parsed.seoKeywords : undefined;
+        const rawTags = Array.isArray(parsed.searchTags) ? parsed.searchTags : rawKeywords;
+        const dedupedKeywords = rawKeywords ? deduplicateKeywords(rawKeywords) : undefined;
+        const dedupedTags = rawTags ? deduplicateKeywords(rawTags) : dedupedKeywords;
+
+        return {
+          titleEn: parsed.titleEn || attributes.titleEn,
+          titleHi: parsed.titleHi || attributes.titleHi,
+          descriptionEn: parsed.descriptionEn || '',
+          descriptionHi: parsed.descriptionHi || '',
+          culturalContext: parsed.culturalContext || undefined,
+          seoKeywords: dedupedKeywords,
+          searchTags: dedupedTags,
+          metaDescription: parsed.metaDescription || parsed.descriptionEn || undefined
+        };
+      }
+    } catch (err) {
+      console.warn('[Shilp-AI] OpenRouter description generation notice:', err);
+    }
+  }
+
+  // 4. Final fallback: structured deterministic description
+  return buildFallbackDescription(attributes, diwaliContext);
 }
 
 /**
- * Build a plain-language catalog description from structured artisan attributes.
- * Used as a graceful fallback when Gemini is unavailable after retries.
- * Contains ONLY facts explicitly extracted from artisan voice — no inventions.
+ * Build a plain-language catalog description from structured artisan attributes and DIWALI cultural context.
+ * Used as a graceful fallback when Gemini/OpenRouter is unavailable after retries.
+ * Contains ONLY facts explicitly extracted from artisan voice and verified DIWALI context — no inventions.
  */
-function buildFallbackDescription(
-  attributes: Parameters<typeof generateCulturalDescription>[0]
+export function buildFallbackDescription(
+  attributes: Parameters<typeof generateCulturalDescription>[0],
+  diwaliContext?: string
 ): CulturallyGroundedDescriptionResponse {
   const parts: string[] = [];
 
@@ -676,14 +831,21 @@ function buildFallbackDescription(
   if (attributes.zariType) parts.push(`${attributes.zariType}.`);
   if (attributes.dyeType) parts.push(`Coloured using ${attributes.dyeType}.`);
 
+  // Cultural heritage context
+  let cleanDiwaliContext: string | undefined = undefined;
+  if (diwaliContext && !diwaliContext.startsWith('No specific cultural heritage match')) {
+    cleanDiwaliContext = diwaliContext;
+    parts.push(diwaliContext);
+  }
+
   // Final fallback if no facts at all
   const descriptionEn = parts.length > 0
     ? parts.join(' ')
     : `A ${attributes.category} product, handcrafted by an Indian artisan.`;
 
-  // Simple Hindi variant (transliteration — acceptable fallback)
+  // Simple Hindi variant incorporating attributes & heritage context
   const descriptionHi = parts.length > 0
-    ? `यह ${productLabel || 'उत्पाद'} भारतीय कारीगरी का एक उत्कृष्ट उदाहरण है।`
+    ? `यह ${productLabel || 'उत्पाद'} परम्परागत तकनीक द्वारा निर्मित एक उत्कृष्ट भारतीय हस्तशिल्प है। ${cleanDiwaliContext || ''}`.trim()
     : `यह एक हस्तनिर्मित भारतीय शिल्प है।`;
 
   return {
@@ -691,7 +853,7 @@ function buildFallbackDescription(
     titleHi: attributes.titleHi,
     descriptionEn,
     descriptionHi,
-    culturalContext: undefined,
+    culturalContext: cleanDiwaliContext,
     seoKeywords: undefined,
     searchTags: undefined,
     metaDescription: descriptionEn.slice(0, 160),

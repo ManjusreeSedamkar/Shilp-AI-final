@@ -133,8 +133,12 @@ Respond ONLY with a valid raw JSON object (no markdown, no backticks):
     if (!openrouterResponse.ok) {
       const errText = await openrouterResponse.text();
       return new Response(
-        JSON.stringify({ error: `OpenRouter API error: ${openrouterResponse.status}`, details: errText }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: false,
+          error: `OpenRouter API error: ${openrouterResponse.status}`,
+          details: errText
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 

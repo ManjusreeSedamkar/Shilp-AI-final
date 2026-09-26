@@ -45,6 +45,8 @@ export interface ExtractedProductAttributes {
   dyeType: string | null;             // e.g. "Natural Dye"
   zariType: string | null;            // e.g. "100% Zari"
   fabricType: string | null;          // e.g. "Mulberry Silk"
+  material?: string | null;           // e.g. "Silk", "Brass", "Terracotta"
+  primaryColor?: string | null;       // e.g. "Cream", "Red"
   finish: string | null;              // e.g. "Antique", "Polished"
   artisanClaims: string[];            // verbatim claims from artisan
 
@@ -220,6 +222,8 @@ export class VoiceCatalogerEngine {
       constructionMethod = 'Block Printed';
     } else if (/\b(?:resist\s*print|batik)\b/i.test(transcript)) {
       constructionMethod = 'Batik / Resist Printed';
+    } else if (/\b(?:handloom|हथकरघा|haathkargha)\b/i.test(transcript)) {
+      constructionMethod = 'Handloom Weaving';
     }
 
     // ── 6. Pattern & Motif ────────────────────────────────────────────────────
@@ -227,13 +231,14 @@ export class VoiceCatalogerEngine {
     let motif: string | null = null;
 
     // Extended multilingual pattern matching:
-    // - English: floral, flower, floral design
-    // - Roman Hindi: phool, phoolon, phoolon ke design, paramparik phoolon, paramparik design
-    // - Hindi script: फूल, फूलों के डिजाइन, पारंपरिक फूलों
-    // - Telugu: పూల డిజైన్లు, పూల నమూనా
-    if (/(?:floral|flower|phool|फूल|phoolon|फूलों|పూల|گل|floral[\s\-]*design|phool[\s\-]*design|paramparik[\s\-]*phool|पारंपरिक[\s\-]*फूल)/i.test(transcript)) {
+    const hasFloral = /(?:floral|flower|phool|फूल|phoolon|फूलों|పూల|گل|floral[\s\-]*design|phool[\s\-]*design|paramparik[\s\-]*phool|पारंपरिक[\s\-]*फूल)/i.test(transcript);
+    const hasGeometric = /\b(?:geometric|geometry|ज्यामितीय|ज्यामिती|రేఖాగణిత)\b/i.test(transcript);
+
+    if (hasFloral && hasGeometric) {
+      pattern = 'Floral & Geometric Motifs';
+    } else if (hasFloral) {
       pattern = 'Traditional floral design';
-    } else if (/\b(?:geometric|geometry|ज्यामितीय|ज्यामिती|రేఖాగణిత)\b/i.test(transcript)) {
+    } else if (hasGeometric) {
       pattern = 'Geometric';
     } else if (/\b(?:paisley|buta|बूटा|कलगी|పేస్లీ)\b/i.test(transcript)) {
       pattern = 'Paisley / Buta';
@@ -246,7 +251,6 @@ export class VoiceCatalogerEngine {
     } else if (/\b(?:checkered|checked|jaali|जाली|चेक|జాలీ)\b/i.test(transcript)) {
       pattern = 'Checkered';
     } else if (/\b(?:paramparik|traditional)[\s\-]*(?:design|naksha|नक्शा|डिजाइन)/i.test(transcript)) {
-      // If only "paramparik design" is mentioned without specifying the motif type
       pattern = 'Traditional design';
     }
 
@@ -385,18 +389,22 @@ export class VoiceCatalogerEngine {
       text.includes('ikat') || text.includes('ecat') ||
       text.includes('pochampally') || text.includes('pochampalli') || text.includes('पोचमपल्ली') ||
       text.includes('kanchipuram') || text.includes('kanjivaram') ||
-      text.includes('कांचीपुरम') || text.includes('कांजीवरम') ||  // Devanagari Kanchipuram
+      text.includes('कांचीपुरम') || text.includes('कांजीवरम') ||
       text.includes('handloom') || text.includes('हथकरघा') ||
       text.includes('weave') || text.includes('woven') || text.includes('बुनाई') || text.includes('बुनी') ||
       text.includes('handwoven') || text.includes('haath se buni') ||
       text.includes('shawl') || text.includes('शॉल') ||
       text.includes('dupatta') || text.includes('दुपट्टा') ||
-      text.includes('stole') ||
-      weavingMethod !== null;  // handwoven/hand-spun detected above → textile signal
+      text.includes('stole') || text.includes('स्टोल') ||
+      text.includes('scarf') || text.includes('स्काफ') || text.includes('स्कार्फ') ||
+      text.includes('kurta') || text.includes('kurti') || text.includes('कुर्ता') || text.includes('कुर्ती') ||
+      text.includes('fabric') || text.includes('kapda') || text.includes('कपड़ा') || text.includes('वस्त्र') ||
+      weavingMethod !== null;
 
     const isMetalcraft =
       text.includes('dhokra') || text.includes('dokra') || text.includes('ढोकरा') ||
       text.includes('brass') || text.includes('पीतल') || text.includes('peetal') ||
+      text.includes('bronze') || text.includes('कांसा') || text.includes('kansa') ||
       text.includes('bell metal') || text.includes('bell-metal') ||
       text.includes('cire perdue') || text.includes('lost-wax') || text.includes('lost wax') ||
       text.includes('bastar') || text.includes('बस्तर');
@@ -405,6 +413,8 @@ export class VoiceCatalogerEngine {
       text.includes('terracotta') || text.includes('terra-cotta') || text.includes('टेराकोटा') ||
       text.includes('pottery') || text.includes('कुम्हार') || text.includes('कुंभार') ||
       text.includes('clay') || text.includes('मिट्टी') || text.includes('माटी') ||
+      text.includes('vase') || text.includes('guldasta') || text.includes('गुलदस्ता') ||
+      text.includes('bowl') || text.includes('katora') || text.includes('कटोरा') ||
       text.includes('bankura') || text.includes('बांकुरा');
 
     const isPainting =
@@ -418,13 +428,26 @@ export class VoiceCatalogerEngine {
       (text.includes('shawl') || text.includes('शॉल')) && (text.includes('kashmiri') || text.includes('कश्मीरी'));
 
     const isWoodcraft =
-      text.includes('teakwood') || text.includes('sheesham') ||
-      text.includes('wood carving') || text.includes('wooden carving') ||
+      text.includes('teakwood') || text.includes('sheesham') || text.includes('wood') ||
+      text.includes('wood carving') || text.includes('wooden carving') || text.includes('लकड़ी') ||
       text.includes('नक्काशीदार लकड़ी') || text.includes('woodwork');
+
+    const isSculpture =
+      text.includes('statue') || text.includes('figurine') || text.includes('idol') ||
+      text.includes('murti') || text.includes('मूर्ति') || text.includes('विग्रह');
+
+    const isOtherCraft =
+      text.includes('doll') || text.includes('gudia') || text.includes('गुड़िया') ||
+      text.includes('basket') || text.includes('tokri') || text.includes('टोकरी') ||
+      text.includes('wall hanging') || text.includes('wall decor') || text.includes('वॉल हैंगिंग') ||
+      text.includes('jute') || text.includes('जूट') ||
+      text.includes('bamboo') || text.includes('बांस') ||
+      text.includes('cane') || text.includes('बेत') ||
+      text.includes('leather') || text.includes('चमड़ा') ||
+      text.includes('paper') || text.includes('कागज') || text.includes('papier-mache');
 
     // ── Assign category + extract spoken style/technique/material ─────────────
     if (isPashmina) {
-      // Pashmina check before generic textile so it takes precedence
       category = 'Textiles & Handloom';
       isExplicitVoiceMatch = true;
       spokenProductType = text.includes('shawl') || text.includes('शॉल') ? 'Shawl' : 'Pashmina Textile';
@@ -435,14 +458,20 @@ export class VoiceCatalogerEngine {
       category = 'Textiles & Handloom';
       isExplicitVoiceMatch = true;
 
-      if (text.includes('saree') || text.includes('sari') || text.includes('साड़ी')) spokenProductType = 'Saree';
+      const hasSilk = text.includes('silk') || text.includes('रेशम') || text.includes('सिल्क');
+      const hasSaree = text.includes('saree') || text.includes('sari') || text.includes('साड़ी');
+
+      if (hasSilk && hasSaree) spokenProductType = 'Silk Saree';
+      else if (hasSaree) spokenProductType = 'Saree';
       else if (text.includes('shawl') || text.includes('शॉल')) spokenProductType = 'Shawl';
       else if (text.includes('dupatta') || text.includes('दुपट्टा')) spokenProductType = 'Dupatta';
-      else if (text.includes('stole')) spokenProductType = 'Stole';
+      else if (text.includes('stole') || text.includes('स्टोल')) spokenProductType = 'Stole';
+      else if (text.includes('scarf') || text.includes('स्काफ') || text.includes('स्कार्फ')) spokenProductType = 'Scarf';
+      else if (text.includes('kurta') || text.includes('kurti') || text.includes('कुर्ता')) spokenProductType = 'Kurta';
+      else if (text.includes('fabric') || text.includes('kapda') || text.includes('कपड़ा')) spokenProductType = 'Fabric';
       else spokenProductType = 'Textile';
 
       if (text.includes('pochampally') || text.includes('pochampalli') || text.includes('पोचमपल्ली')) spokenStyle = 'Pochampally';
-      // Kanchipuram: ASCII + Devanagari (कांचीपुरम)
       else if (text.includes('kanchipuram') || text.includes('kanjivaram') || text.includes('कांजीवरम') || text.includes('कांचीपुरम')) spokenStyle = 'Kanchipuram';
       else if (text.includes('banarasi') || text.includes('बनारसी')) spokenStyle = 'Banarasi';
       else if (text.includes('patola') || text.includes('पटोला')) spokenStyle = 'Patola';
@@ -454,26 +483,37 @@ export class VoiceCatalogerEngine {
       else if (weavingMethod) spokenTechnique = weavingMethod;
       else if (text.includes('handloom') || text.includes('हथकरघा')) spokenTechnique = 'Handloom Weaving';
 
-      spokenMaterial = fabricType || (text.includes('silk') || text.includes('रेशम') ? 'Silk' : null)
-                       || (text.includes('cotton') || text.includes('सूती') ? 'Cotton' : null);
+      spokenMaterial = fabricType || (hasSilk ? 'Silk' : null)
+                       || (text.includes('cotton') || text.includes('सूती') ? 'Cotton' : null)
+                       || (text.includes('wool') || text.includes('ऊन') ? 'Wool' : null)
+                       || (text.includes('linen') || text.includes('लिनन') ? 'Linen' : null)
+                       || (text.includes('jute') || text.includes('जूट') ? 'Jute' : null)
+                       || (text.includes('hemp') || text.includes('हेम्प') ? 'Hemp' : null);
 
-    } else if (isMetalcraft) {
+    } else if (isMetalcraft || (isSculpture && (text.includes('brass') || text.includes('bronze') || text.includes('metal')))) {
       category = 'Metalcraft & Dhokra';
       isExplicitVoiceMatch = true;
-      spokenProductType = 'Metal Craft';
+      if (text.includes('statue') || text.includes('मूर्ति')) spokenProductType = 'Statue';
+      else if (text.includes('figurine')) spokenProductType = 'Figurine';
+      else if (text.includes('idol')) spokenProductType = 'Idol';
+      else spokenProductType = 'Metal Craft';
 
       if (text.includes('dhokra') || text.includes('dokra')) spokenTechnique = 'Dhokra (Lost-Wax Casting)';
       else if (text.includes('lost-wax') || text.includes('lost wax') || text.includes('cire perdue')) spokenTechnique = 'Lost-Wax Casting';
 
       if (text.includes('brass') || text.includes('पीतल')) spokenMaterial = 'Brass';
+      else if (text.includes('bronze') || text.includes('कांसा')) spokenMaterial = 'Bronze';
       else if (text.includes('bell metal') || text.includes('bell-metal')) spokenMaterial = 'Bell Metal';
       if (text.includes('bastar') || text.includes('बस्तर')) spokenStyle = 'Bastar';
 
     } else if (isTerracotta) {
       category = 'Clay & Terracotta';
       isExplicitVoiceMatch = true;
-      spokenProductType = 'Terracotta';
-      spokenMaterial = 'Terracotta Clay';
+      if (text.includes('vase') || text.includes('guldasta') || text.includes('गुलदस्ता')) spokenProductType = 'Vase';
+      else if (text.includes('bowl') || text.includes('katora') || text.includes('कटोरा')) spokenProductType = 'Bowl';
+      else spokenProductType = 'Terracotta';
+
+      spokenMaterial = text.includes('terracotta') || text.includes('टेराकोटा') ? 'Terracotta' : 'Clay';
       if (text.includes('bankura') || text.includes('बांकुरा')) spokenStyle = 'Bankura';
       if (text.includes('pottery') || text.includes('कुम्हार')) spokenTechnique = 'Hand-Thrown Pottery';
 
@@ -485,13 +525,39 @@ export class VoiceCatalogerEngine {
       else if (text.includes('mithila') || text.includes('मिथिला')) spokenStyle = 'Mithila';
       else if (text.includes('warli')) spokenStyle = 'Warli';
       else if (text.includes('pattachitra') || text.includes('patachitra')) spokenStyle = 'Pattachitra';
+      spokenMaterial = text.includes('paper') || text.includes('कागज') ? 'Paper' : 'Canvas';
 
     } else if (isWoodcraft) {
       category = 'Woodcraft & Carving';
       isExplicitVoiceMatch = true;
-      spokenProductType = 'Wood Craft';
-      if (text.includes('teakwood')) spokenMaterial = 'Teakwood';
-      else if (text.includes('sheesham')) spokenMaterial = 'Sheesham';
+      if (text.includes('statue') || text.includes('मूर्ति')) spokenProductType = 'Statue';
+      else if (text.includes('figurine')) spokenProductType = 'Figurine';
+      else spokenProductType = 'Wood Craft';
+      spokenMaterial = text.includes('teakwood') ? 'Teakwood' : (text.includes('sheesham') ? 'Sheesham' : 'Wood');
+
+    } else if (isSculpture) {
+      category = 'Other Heritage Craft';
+      isExplicitVoiceMatch = true;
+      if (text.includes('statue') || text.includes('मूर्ति')) spokenProductType = 'Statue';
+      else if (text.includes('figurine')) spokenProductType = 'Figurine';
+      else if (text.includes('idol')) spokenProductType = 'Idol';
+      else spokenProductType = 'Sculpture';
+
+      if (text.includes('stone') || text.includes('patthar') || text.includes('पत्थर')) spokenMaterial = 'Stone';
+      else if (text.includes('clay') || text.includes('मिट्टी')) spokenMaterial = 'Clay';
+
+    } else if (isOtherCraft) {
+      category = 'Other Heritage Craft';
+      isExplicitVoiceMatch = true;
+      if (text.includes('doll') || text.includes('gudia') || text.includes('गुड़िया')) spokenProductType = 'Doll';
+      else if (text.includes('basket') || text.includes('tokri') || text.includes('टोकरी')) spokenProductType = 'Basket';
+      else if (text.includes('wall hanging') || text.includes('वॉल हैंगिंग')) spokenProductType = 'Wall Hanging';
+
+      if (text.includes('jute') || text.includes('जूट')) spokenMaterial = 'Jute';
+      else if (text.includes('bamboo') || text.includes('बांस')) spokenMaterial = 'Bamboo';
+      else if (text.includes('cane') || text.includes('बेत')) spokenMaterial = 'Cane';
+      else if (text.includes('leather') || text.includes('चमड़ा')) spokenMaterial = 'Leather';
+      else if (text.includes('paper') || text.includes('कागज')) spokenMaterial = 'Paper';
     }
 
     // ── 13. Subject / Named figure ────────────────────────────────────────────

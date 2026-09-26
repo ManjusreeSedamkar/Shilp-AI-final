@@ -8,9 +8,9 @@ import { CURRENT_ARTISAN } from '../data/craftPresets';
 import { getSpeechLangCode, translate } from '../services/translations';
 import { AIImageStudio, DEFAULT_IMAGE_OPTIONS } from '../services/imageStudio';
 import { uploadImageToStorage } from '../services/firebase';
-import { saveProductToSupabase } from '../services/supabase';
+import { saveProductToSupabase, supabase } from '../services/supabase';
 import { retrieveCulturalContext, DiwaliRetrievalResult } from '../services/diwaliRetriever';
-import { generateCulturalDescription, analyzeImageVisuals, hasGeminiApiKey, hasOpenRouterApiKey } from '../services/geminiService';
+import { generateCulturalDescription, analyzeImageVisuals, hasGeminiApiKey, hasOpenRouterApiKey, buildFallbackDescription } from '../services/geminiService';
 
 interface VoiceCatalogerModalProps {
   language?: Language;
@@ -69,9 +69,9 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
     try {
       let finalAttributes: ExtractedProductAttributes = { ...baseExtracted };
 
-      // 2. Vision Analysis (Gemini Vision)
+      // 2. Vision Analysis (Gemini Vision / Edge Function / Fallback)
       let visionResult = null;
-      if (hasGeminiApiKey() && imageToPass) {
+      if (imageToPass) {
         visionResult = await analyzeImageVisuals(imageToPass);
       }
 
@@ -87,6 +87,7 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
         finalAttributes.craftTechnique = visionResult.visualObjectType;
         finalAttributes.primaryMaterial = visionResult.apparentMaterial;
         finalAttributes.color = visionResult.visibleColors;
+        finalAttributes.primaryColor = visionResult.visibleColors;
         finalAttributes.titleEn = visionResult.visualObjectType;
         finalAttributes.titleHi = visionResult.visualObjectType;
       }
@@ -94,10 +95,14 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
       // Supplement VISUAL attributes from image where voice did not state them
       // (applies even when voice IS explicit — image fills in visual-only gaps)
       if (visionResult) {
-        // Pattern: if artisan didn't state one, use image observation
+        // Pattern & Motif: if artisan didn't state one, use image observation
         if (!finalAttributes.pattern && visionResult.visiblePatternsMotifs &&
             visionResult.visiblePatternsMotifs !== 'Traditional Motifs') {
           finalAttributes.pattern = visionResult.visiblePatternsMotifs;
+        }
+        if (!finalAttributes.motif && visionResult.visiblePatternsMotifs &&
+            visionResult.visiblePatternsMotifs !== 'Traditional Motifs') {
+          finalAttributes.motif = visionResult.visiblePatternsMotifs;
         }
         // Border color: supplement from image if artisan didn't state it
         if (!finalAttributes.borderColor && visionResult.visibleBorderColor) {
@@ -107,6 +112,7 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
         if (!baseExtracted.color || baseExtracted.color === 'Natural Finish') {
           if (visionResult.visibleColors && visionResult.visibleColors !== 'Natural Finish') {
             finalAttributes.color = visionResult.visibleColors;
+            finalAttributes.primaryColor = visionResult.visibleColors;
           }
         }
       }
@@ -154,9 +160,45 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
           : 'null (no match / below threshold)');
       }
 
-      // 4. Cultural Description Generation (Gemini Primary -> OpenRouter Fallback -> Structured Fallback)
-      if (hasGeminiApiKey() || hasOpenRouterApiKey()) {
-        const enhanced = await generateCulturalDescription(
+      // 4. Cultural Description Generation (Supabase Edge Function / Gemini / OpenRouter -> Structured Fallback)
+      let enhanced: any = null;
+      try {
+        if (hasGeminiApiKey() || hasOpenRouterApiKey() || Boolean(supabase)) {
+          enhanced = await generateCulturalDescription(
+            {
+              category: finalAttributes.category,
+              craftTechnique: finalAttributes.craftTechnique,
+              primaryMaterial: finalAttributes.primaryMaterial,
+              productionDays: finalAttributes.productionDays,
+              rawMaterialCost: finalAttributes.rawMaterialCost,
+              color: finalAttributes.color,
+              titleEn: finalAttributes.titleEn,
+              titleHi: finalAttributes.titleHi,
+              // Pass all rich artisan-provided attributes
+              productType: finalAttributes.productType,
+              style: finalAttributes.style,
+              subject: finalAttributes.subject,
+              weavingMethod: finalAttributes.weavingMethod,
+              constructionMethod: finalAttributes.constructionMethod,
+              pattern: finalAttributes.pattern,
+              motif: finalAttributes.motif,
+              borderColor: finalAttributes.borderColor,
+              dyeType: finalAttributes.dyeType,
+              zariType: finalAttributes.zariType,
+              fabricType: finalAttributes.fabricType,
+              artisanClaims: finalAttributes.artisanClaims,
+            },
+            diwaliContextStr,
+            imageToPass
+          );
+        }
+      } catch (err) {
+        console.warn('Cultural pipeline error:', err);
+      }
+
+      // Guarantee fallback description execution if AI is unavailable or returned placeholder
+      if (!enhanced || !enhanced.descriptionEn || enhanced.descriptionEn === 'Generating catalog description…') {
+        enhanced = buildFallbackDescription(
           {
             category: finalAttributes.category,
             craftTechnique: finalAttributes.craftTechnique,
@@ -166,7 +208,6 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
             color: finalAttributes.color,
             titleEn: finalAttributes.titleEn,
             titleHi: finalAttributes.titleHi,
-            // Pass all rich artisan-provided attributes
             productType: finalAttributes.productType,
             style: finalAttributes.style,
             subject: finalAttributes.subject,
@@ -180,27 +221,29 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
             fabricType: finalAttributes.fabricType,
             artisanClaims: finalAttributes.artisanClaims,
           },
-          diwaliContextStr,
-          imageToPass
+          diwaliContextStr
         );
+      }
 
-        if (enhanced) {
-          setExtractedData(prev => prev ? {
-            ...prev,
-            titleEn: enhanced.titleEn || prev.titleEn,
-            titleHi: enhanced.titleHi || prev.titleHi,
+      if (enhanced) {
+        setExtractedData(prev => {
+          const base = prev || finalAttributes;
+          return {
+            ...base,
+            titleEn: enhanced.titleEn || base.titleEn,
+            titleHi: enhanced.titleHi || base.titleHi,
             descriptionEn: enhanced.descriptionEn,
             descriptionHi: enhanced.descriptionHi,
             culturalContext: enhanced.culturalContext || (diwaliRes ? diwaliRes.contextString : undefined),
-            seoKeywords: enhanced.seoKeywords || prev.seoKeywords,
-            searchTags: enhanced.searchTags || (enhanced.seoKeywords || prev.seoKeywords),
-            metaDescription: enhanced.metaDescription || enhanced.descriptionEn || prev.descriptionEn
-          } : null);
-          setIsDiwaliGrounded(true);
-        }
+            seoKeywords: enhanced.seoKeywords || base.seoKeywords,
+            searchTags: enhanced.searchTags || (enhanced.seoKeywords || base.seoKeywords),
+            metaDescription: enhanced.metaDescription || enhanced.descriptionEn || base.descriptionEn
+          };
+        });
+        setIsDiwaliGrounded(true);
       }
     } catch (err) {
-      console.warn('Cultural pipeline error:', err);
+      console.warn('Cultural pipeline exception:', err);
     } finally {
       setIsEnrichingWithDiwali(false);
     }
@@ -240,14 +283,21 @@ export const VoiceCatalogerModal: React.FC<VoiceCatalogerModalProps> = ({
       recognition.lang = selectedLangCode;
 
       recognition.onresult = (event: any) => {
-        let currentTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          currentTranscript += event.results[i][0].transcript;
+        let finalTranscript = '';
+        let interimTranscript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            finalTranscript += res[0].transcript + ' ';
+          } else {
+            interimTranscript += res[0].transcript;
+          }
         }
-        setTranscript(currentTranscript);
-        latestTranscriptRef.current = currentTranscript;
+        const fullTranscript = (finalTranscript + interimTranscript).trim();
+        setTranscript(fullTranscript);
+        latestTranscriptRef.current = fullTranscript;
         // Update basic extracted attributes locally during live speech (NO Gemini API calls while speaking)
-        const extracted = VoiceCatalogerEngine.extractAttributesFromSpeech(currentTranscript);
+        const extracted = VoiceCatalogerEngine.extractAttributesFromSpeech(fullTranscript);
         setExtractedData(extracted);
       };
 

@@ -390,6 +390,14 @@ function buildMap(language: Language): TextMap {
 }
 
 const originalByNode = new WeakMap<Text, string>();
+const lastSetByNode = new WeakMap<Text, string>();
+
+function isPriceOrNumber(value: string): boolean {
+  const norm = normalize(value);
+  if (/^[\s₹$€£\d,.:%+\-\/]+$/.test(norm)) return true;
+  if (/^(?:₹|rs\.?|rupees|usd|\$)\s*[\d,.]+/i.test(norm)) return true;
+  return false;
+}
 
 function translateTextNodes(root: Node, map: TextMap, language: Language) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -411,11 +419,19 @@ function translateTextNodes(root: Node, map: TextMap, language: Language) {
     const currentNormalized = normalize(currentText);
     if (!currentNormalized) continue;
 
-    // The first value React rendered for this node is its source value.
-    // This prevents Hindi -> Telugu -> Tamil from translating Telugu/Hindi
-    // repeatedly and losing the original text.
+    // Do NOT translate or cache currency, prices, numbers, or numeric values
+    if (isPriceOrNumber(currentNormalized)) {
+      originalByNode.delete(node);
+      lastSetByNode.delete(node);
+      continue;
+    }
+
+    const lastSet = lastSetByNode.get(node);
     let source = originalByNode.get(node);
-    if (!source) {
+
+    // If React updated nodeValue to new content (recycled DOM node or dynamic state change),
+    // invalidate stale cached source and re-evaluate from current text.
+    if (!source || (lastSet !== undefined && currentNormalized !== normalize(lastSet) && currentNormalized !== normalize(source))) {
       source = toEnglish(currentNormalized);
       originalByNode.set(node, source);
     }
@@ -426,11 +442,15 @@ function translateTextNodes(root: Node, map: TextMap, language: Language) {
     if (translated && normalize(translated) !== currentNormalized) {
       const leading = currentText.match(/^\s*/)?.[0] ?? '';
       const trailing = currentText.match(/\s*$/)?.[0] ?? '';
-      node.nodeValue = `${leading}${translated}${trailing}`;
+      const newVal = `${leading}${translated}${trailing}`;
+      node.nodeValue = newVal;
+      lastSetByNode.set(node, newVal);
     } else if (!translated && language === 'en' && source && normalize(source) !== currentNormalized) {
       const leading = currentText.match(/^\s*/)?.[0] ?? '';
       const trailing = currentText.match(/\s*$/)?.[0] ?? '';
-      node.nodeValue = `${leading}${source}${trailing}`;
+      const newVal = `${leading}${source}${trailing}`;
+      node.nodeValue = newVal;
+      lastSetByNode.set(node, newVal);
     } else if (!translated && language !== 'en') {
       // Collect eligible UI phrases for batched, deduplicated Sarvam translation
       if (shouldTranslate(source)) {
